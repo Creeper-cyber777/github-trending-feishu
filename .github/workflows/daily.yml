@@ -8,7 +8,7 @@ on:
       limit:
         description: '推送条数'
         required: false
-        default: '10'
+        default: '15'
       since:
         description: '抓取周期 (daily / weekly / monthly)'
         required: false
