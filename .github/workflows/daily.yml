@@ -1,0 +1,68 @@
+name: GitHub Trending Daily Push
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: '推送条数'
+        required: false
+        default: '10'
+      since:
+        description: '抓取周期 (daily / weekly / monthly)'
+        required: false
+        default: 'daily'
+      dry_run:
+        description: '仅生成内容、不发送到飞书 (true/false)'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: trending-push
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run digest
+        env:
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+          TRENDING_ARCHIVE_DIR: ${{ github.workspace }}/artifact
+        run: |
+          set -euo pipefail
+          LIMIT="${{ github.event.inputs.limit || '10' }}"
+          SINCE="${{ github.event.inputs.since || 'daily' }}"
+          DRY="${{ github.event.inputs.dry_run || 'false' }}"
+
+          ARGS=("--limit" "$LIMIT" "--since" "$SINCE")
+          if [ "$DRY" = "true" ]; then
+            ARGS+=("--dry-run")
+          fi
+
+          node daily.js "${ARGS[@]}"
+
+      - name: Upload digest artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trending-digest-${{ github.run_number }}
+          path: artifact/
+          retention-days: 14
+          if-no-files-found: ignore
