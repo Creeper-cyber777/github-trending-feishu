@@ -17,10 +17,14 @@ secrets.*
 
 # 运行时归档产物
 输出/
+artifact/
 archive/
 logs/
 card-*.json
 GitHub热门_*.md
+
+# 注意：.trending-state/ 必须提交。
+# 它是"今天是否已推送"的去重状态，靠提交回仓库在多次运行间共享。
 
 # 系统与编辑器
 .DS_Store
