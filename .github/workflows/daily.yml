@@ -32,8 +32,9 @@ concurrency:
   group: trending-push
   cancel-in-progress: false
 
+# 需要 write 权限把去重状态提交回仓库。
 permissions:
-  contents: read
+  contents: write
 
 env:
   TRENDING_STATE_DIR: ${{ github.workspace }}/.trending-state
@@ -52,13 +53,14 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Restore push state
-        uses: actions/cache/restore@v4
-        with:
-          path: .trending-state
-          key: trending-state-${{ github.run_id }}
-          restore-keys: |
-            trending-state-
+      - name: Show push state
+        run: |
+          if [ -f .trending-state/push-state.json ]; then
+            echo "已有状态记录："
+            cat .trending-state/push-state.json
+          else
+            echo "尚无状态记录（首次运行）"
+          fi
 
       - name: Run digest
         env:
@@ -79,12 +81,18 @@ jobs:
 
           node daily.js "${ARGS[@]}"
 
-      - name: Save push state
+      - name: Persist push state
         if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: .trending-state
-          key: trending-state-${{ github.run_id }}
+        run: |
+          if [ -z "$(git status --porcelain .trending-state)" ]; then
+            echo "状态无变化，跳过提交"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .trending-state
+          git commit -m "chore(state): record push status for $(TZ=Asia/Shanghai date +%Y-%m-%d)"
+          git push
 
       - name: Upload digest artifact
         if: always()
