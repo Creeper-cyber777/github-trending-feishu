@@ -1,8 +1,14 @@
 name: GitHub Trending Daily Push
 
+# 触发方式：
+#   schedule          —— 每天三个时间点，前一个为主、后两个兜底
+#   workflow_dispatch —— 手动触发，便于验证与补发
 on:
   schedule:
-    - cron: '0 1 * * *'
+    # GitHub 的 cron 一律使用 UTC。北京时间 = UTC+8。
+    - cron: '0 1 * * *'    # 北京 09:00（主）
+    - cron: '40 1 * * *'   # 北京 09:40（兜底一）
+    - cron: '20 2 * * *'   # 北京 10:20（兜底二）
   workflow_dispatch:
     inputs:
       limit:
@@ -17,6 +23,10 @@ on:
         description: '仅生成内容、不发送到飞书 (true/false)'
         required: false
         default: 'false'
+      force:
+        description: '忽略当天去重、强制重发 (true/false)'
+        required: false
+        default: 'false'
 
 concurrency:
   group: trending-push
@@ -24,6 +34,9 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  TRENDING_STATE_DIR: ${{ github.workspace }}/.trending-state
 
 jobs:
   push:
@@ -39,6 +52,14 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Restore push state
+        uses: actions/cache/restore@v4
+        with:
+          path: .trending-state
+          key: trending-state-${{ github.run_id }}
+          restore-keys: |
+            trending-state-
+
       - name: Run digest
         env:
           ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
@@ -47,16 +68,23 @@ jobs:
           TRENDING_ARCHIVE_DIR: ${{ github.workspace }}/artifact
         run: |
           set -euo pipefail
-          LIMIT="${{ github.event.inputs.limit || '10' }}"
+          LIMIT="${{ github.event.inputs.limit || '15' }}"
           SINCE="${{ github.event.inputs.since || 'daily' }}"
           DRY="${{ github.event.inputs.dry_run || 'false' }}"
+          FORCE="${{ github.event.inputs.force || 'false' }}"
 
           ARGS=("--limit" "$LIMIT" "--since" "$SINCE")
-          if [ "$DRY" = "true" ]; then
-            ARGS+=("--dry-run")
-          fi
+          if [ "$DRY" = "true" ]; then ARGS+=("--dry-run"); fi
+          if [ "$FORCE" = "true" ]; then ARGS+=("--force"); fi
 
           node daily.js "${ARGS[@]}"
+
+      - name: Save push state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .trending-state
+          key: trending-state-${{ github.run_id }}
 
       - name: Upload digest artifact
         if: always()
