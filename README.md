@@ -2,11 +2,29 @@
 
 每日抓取 GitHub Trending 榜单，用智谱 `glm-4-flash` 生成中文摘要，推送到飞书。
 
-每天定时抓取 [GitHub Trending](https://github.com/trending) 榜单，用智谱 `glm-4-flash` 生成中文摘要，推送到飞书群机器人。由 GitHub Actions 在云端运行，**不依赖本机开机**。
+由 GitHub Actions 在云端运行，**不依赖本机开机**。
 
 ## 效果
 
 飞书群内每天收到一张卡片：整榜趋势综述 + 每个项目的 AI 中文摘要、语言、star 总数与当日增量。
+
+## 定时与兜底机制
+
+定时任务设置了**三个时间点**，后两个是兜底：
+
+| 时间（北京） | UTC cron | 角色 |
+|---|---|---|
+| 09:00 | `0 1 * * *` | 主时间 |
+| 09:40 | `40 1 * * *` | 兜底一 |
+| 10:20 | `20 2 * * *` | 兜底二 |
+
+GitHub 的 schedule 在高峰期可能延迟甚至跳过，所以用多点触发提高成功率。
+
+**去重保证**：脚本通过 `push-state.js` 记录"当天是否已推送"。三个时间点都会触发 workflow，但只有**第一个成功的**会真正发送到飞书，后续时间点检测到当天已推送会直接跳过并在日志中说明。
+
+- 状态存放在 Actions Cache 中（每次运行用 `run_id` 作 key，`restore-keys` 取回最近状态），跨容器保留
+- 只保留最近 30 天的记录
+- 手动触发时如需强制重发，勾选 `force=true` 或加 `--force`
 
 ## 部署步骤
 
@@ -20,21 +38,15 @@
 | `FEISHU_WEBHOOK` | ✅ | 飞书群机器人 Webhook 地址 |
 | `FEISHU_SECRET` | ❌ | 仅当机器人开启「签名校验」时填写 |
 
-> 密钥只存在于 Secrets 中，工作流通过环境变量注入，不会写入任何文件，也不会出现在日志里。
+> 变量名必须**完全一致**。写成 `FEISHU_WEBHOOK_URL` 之类的变体不会被读取，运行时会报缺少配置。
 
-### 2. 启用 Actions
+### 2. 手动验证一次
 
-若仓库是首次使用 Actions，进 `Actions` 标签页确认已启用。
+`Actions` → `GitHub Trending Daily Push` → `Run workflow`，可调整条数、周期，或勾选 `dry_run` 只生成不发送。
 
-### 3. 手动验证一次
+### 3. 等待定时执行
 
-`Actions` → `GitHub Trending Daily Push` → `Run workflow`，可以调整条数与周期，也可勾选 `dry_run` 只生成不发送。
-
-### 4. 等待定时执行
-
-默认每天 **北京时间 09:00**（UTC 01:00）自动运行。
-
-> GitHub 的定时任务在高峰期可能延迟数分钟至十几分钟，这是平台侧排队行为。若要求严格准点，需要改用带固定执行器的调度服务。
+无需额外操作，到点自动运行。
 
 ## 本地运行
 
@@ -42,6 +54,7 @@
 cp .env.example .env.local   # 填入真实密钥
 node daily.js                # 完整推送
 node daily.js --dry-run      # 只看内容不推送
+node daily.js --force        # 忽略当天去重，强制重发
 node daily.js --limit 5 --since weekly
 node daily.js --no-ai        # 跳过 AI 摘要
 ```
@@ -52,10 +65,11 @@ node daily.js --no-ai        # 跳过 AI 摘要
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--limit N` | 10 | 推送条数 |
+| `--limit N` | 10 | 推送条数（网页默认 15，最多 25） |
 | `--since` | daily | `daily` / `weekly` / `monthly` |
 | `--dry-run` | 关 | 只输出卡片 JSON，不推送 |
 | `--no-ai` | 关 | 跳过 AI，使用原始描述 |
+| `--force` | 关 | 忽略当天去重，强制重发 |
 | `--out <path>` | — | 额外把卡片 JSON 写到指定路径 |
 
 ## 环境变量
@@ -67,6 +81,7 @@ node daily.js --no-ai        # 跳过 AI 摘要
 | `FEISHU_SECRET` | 飞书签名密钥（可选） |
 | `ZHIPU_MODEL` | 默认 `glm-4-flash` |
 | `TRENDING_ARCHIVE_DIR` | 归档目录（可选） |
+| `TRENDING_STATE_DIR` | 推送状态目录（可选，默认与归档同目录） |
 
 ## 安全设计
 
@@ -74,7 +89,7 @@ node daily.js --no-ai        # 跳过 AI 摘要
 - **日志自动脱敏**：`redact.js` 在进程启动时接管 `console`，密钥、webhook、长令牌一律替换为 `***REDACTED***`；即使某处代码误打日志也不会泄露。
 - **错误信息收敛**：API 与推送失败时只输出状态码和脱敏后的消息摘要，不回显完整响应体。
 - **触发面收敛**：工作流只监听 `schedule` 与手动 `workflow_dispatch`，不接受 `pull_request` 等外部可控事件。
-- **提交前扫描**：`node scripts/check-secrets.js` 检查仓库中是否有密钥残留，建议配合 pre-commit 钩子使用。
+- **提交前扫描**：`node scripts/check-secrets.js` 检查仓库中是否有密钥残留。
 
 ### 密钥一旦泄露怎么办
 
@@ -87,11 +102,12 @@ node daily.js --no-ai        # 跳过 AI 摘要
 
 ```
 .
-├── .github/workflows/daily.yml   # Actions 工作流
-├── daily.js                      # 主流程：抓取 → 摘要 → 推送
+├── .github/workflows/daily.yml   # Actions 工作流（三 cron + 缓存）
+├── daily.js                      # 主流程：去重 → 抓取 → 摘要 → 推送
 ├── fetch-trending.js             # 抓取并解析 Trending 页面
 ├── summarize.js                  # 调用智谱 GLM 生成摘要
 ├── feishu.js                     # 渲染卡片并推送到飞书
+├── push-state.js                 # 当天推送去重状态
 ├── redact.js                     # 日志脱敏
 ├── .env.js                       # .env.local 加载器
 ├── .env.example                  # 配置模板
@@ -102,6 +118,8 @@ node daily.js --no-ai        # 跳过 AI 摘要
 
 | 现象 | 原因与处理 |
 |---|---|
+| `[跳过] 今天已推送过` | 正常行为，兜底 cron 触发了但当天已发送 |
+| 今天没收到推送 | 检查 Actions 是否有运行记录；如三个 cron 都没跑，点 Run workflow 手动补发 |
 | `fetch failed` | 网络抖动，脚本自动重试 4 次；持续失败检查出口网络 |
 | `智谱 API 401` | Key 无效或额度耗尽 |
 | `飞书 code=19021` | 签名校验失败，检查 `FEISHU_SECRET` |

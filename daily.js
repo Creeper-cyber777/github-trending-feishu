@@ -17,16 +17,18 @@ const { installSafeConsole, redact } = require('./redact.js');
 const { fetchTrending } = require('./fetch-trending.js');
 const { summarize } = require('./summarize.js');
 const { renderCard, sendToFeishu } = require('./feishu.js');
+const { checkPushedToday, markPushed, beijingDate, triggerSource } = require('./push-state.js');
 
 // 在此之后所有 console 输出都会自动脱敏，任何密钥不可能进入 CI 日志。
 installSafeConsole();
 
 function parseArgs(argv) {
-  const opts = { limit: 10, dryRun: false, ai: true, out: null, since: 'daily' };
+  const opts = { limit: 10, dryRun: false, ai: true, out: null, since: 'daily', force: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--dry-run') opts.dryRun = true;
     else if (a === '--no-ai') opts.ai = false;
+    else if (a === '--force') opts.force = true;
     else if (a === '--limit') opts.limit = Number(argv[++i] ?? 10);
     else if (a === '--out') opts.out = argv[++i];
     else if (a === '--since') opts.since = argv[++i] ?? 'daily';
@@ -127,6 +129,20 @@ function writeMarkdown({ repos, overview, summaries, date, sinceLabel }) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const sinceLabel = SINCE_TEXT[opts.since] || '今日';
+  const today = beijingDate();
+  const trigger = triggerSource();
+
+  // ── 兜底去重 ──
+  // 多个 cron 时间点都会触发同一份日报，这里确保每天只真正推送一次。
+  // --dry-run 与 --force 不受去重限制。
+  if (!opts.dryRun && !opts.force) {
+    const { alreadyPushed, record } = checkPushedToday(today);
+    if (alreadyPushed) {
+      console.log(`[跳过] ${today} 已推送过（${record.at}，触发源 ${record.trigger}），本次不再重复发送。`);
+      console.log('       如需强制重发，请加 --force。');
+      return;
+    }
+  }
 
   console.log('[1/3] 抓取 GitHub Trending ...');
   const data = await fetchTrending({ since: opts.since });
@@ -185,7 +201,12 @@ async function main() {
   console.log('[3/3] 推送到飞书 ...');
   const r = await sendToFeishu(card);
   console.log(`      推送成功 ${JSON.stringify(r)}`);
-  appendLog(`[${new Date().toISOString()}] 推送成功，${repos.length} 条，摘要 ${summaries.size} 条`);
+
+  // 标记当天已推送，供后续 cron 时间点判断是否跳过
+  markPushed({ date: today, count: repos.length, trigger });
+  console.log(`      已记录 ${today} 推送状态（触发源 ${trigger}）`);
+
+  appendLog(`[${new Date().toISOString()}] 推送成功，${repos.length} 条，摘要 ${summaries.size} 条，触发源 ${trigger}`);
 }
 
 main().catch((e) => {

@@ -17,7 +17,6 @@ secrets.*
 
 # 运行时归档产物
 输出/
-artifact/
 archive/
 logs/
 card-*.json
@@ -29,8 +28,3 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
-
-# 通用构建缓存
-dist/
-build/
-*.tsbuildinfo
