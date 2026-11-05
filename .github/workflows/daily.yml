@@ -1,14 +1,11 @@
 name: GitHub Trending Daily Push
 
-# 触发方式：
-#   schedule          —— 每天三个时间点，前一个为主、后两个兜底
-#   workflow_dispatch —— 手动触发，便于验证与补发
 on:
   schedule:
-    # GitHub 的 cron 一律使用 UTC。北京时间 = UTC+8。
-    - cron: '0 1 * * *'    # 北京 09:00（主）
-    - cron: '40 1 * * *'   # 北京 09:40（兜底一）
-    - cron: '20 2 * * *'   # 北京 10:20（兜底二）
+    # 北京时间 = UTC+8。以下 4 个 UTC 小时对应北京 09:00–12:59。
+    - cron: '*/20 1-4 * * *'
+    # 保底：若白天 12 次全部被 GitHub 丢弃，20:00（北京）再补一次。
+    - cron: '0 12 * * *'
   workflow_dispatch:
     inputs:
       limit:
@@ -26,13 +23,12 @@ on:
       force:
         description: '忽略当天去重、强制重发 (true/false)'
         required: false
-        default: 'false'
+        default: 'true'   # 手动触发默认强制执行，避免"今天已推送"导致静默跳过
 
 concurrency:
   group: trending-push
   cancel-in-progress: false
 
-# 需要 write 权限把去重状态提交回仓库。
 permissions:
   contents: write
 
@@ -53,8 +49,11 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Show push state
+      - name: Show clock and push state
         run: |
+          echo "UTC       : $(date -u '+%Y-%m-%d %H:%M:%S')"
+          echo "北京时间  : $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
+          echo "触发方式  : ${GITHUB_EVENT_NAME}"
           if [ -f .trending-state/push-state.json ]; then
             echo "已有状态记录："
             cat .trending-state/push-state.json
@@ -92,7 +91,19 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .trending-state
           git commit -m "chore(state): record push status for $(TZ=Asia/Shanghai date +%Y-%m-%d)"
-          git push
+
+          # 并发提交/基线过期时重试，避免去重状态丢失导致重复推送
+          for i in 1 2 3; do
+            if git push; then
+              echo "状态已推送（第 $i 次尝试）"
+              exit 0
+            fi
+            echo "push 失败，rebase 后重试（第 $i 次）"
+            git pull --rebase --autostash || true
+            sleep 5
+          done
+          echo "::error::状态推送失败，今天可能重复推送"
+          exit 1
 
       - name: Upload digest artifact
         if: always()
