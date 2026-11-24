@@ -118,5 +118,11 @@
     "at": "2026-11-23T23:27:10.107Z",
     "count": 15,
     "trigger": "schedule"
+  },
+  "2026-11-25": {
+    "pushed": true,
+    "at": "2026-11-24T21:58:00.944Z",
+    "count": 15,
+    "trigger": "schedule"
   }
 }
